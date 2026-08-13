@@ -1,0 +1,21 @@
+node_modules/
+
+# Data BCA - jangan pernah di-commit
+*.gpg
+*.xlsx
+*.xls
+*.csv
+
+# Kunci & kredensial
+*.pem
+*.key
+*.asc
+.env
+secrets.json
+
+# State runner
+before_sync.txt
+new_files.txt
+
+# Build
+*.exe

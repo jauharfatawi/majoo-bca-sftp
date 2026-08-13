@@ -1,0 +1,14 @@
+{
+  "name": "sftp-decryptor",
+  "version": "1.0.0",
+  "main": "runner.js",
+  "scripts": {
+    "build": "pkg . --targets node18-win-x64 --output sftp-decryptor.exe"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "fs-extra": "^11.2.0",
+    "openpgp": "^5.11.1",
+    "ssh2-sftp-client": "^9.1.0"
+  }
+}
