@@ -13,9 +13,8 @@ node_modules/
 .env
 secrets.json
 
-# State runner
-before_sync.txt
-new_files.txt
+# Download sementara
+*.part
 
 # Build
 *.exe

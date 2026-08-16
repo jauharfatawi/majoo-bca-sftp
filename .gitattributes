@@ -1,0 +1,4 @@
+# Script shell harus LF, kalau CRLF macOS gagal: "bad interpreter: /bin/bash^M"
+*.command text eol=lf
+*.sh      text eol=lf
+*.bat     text eol=crlf

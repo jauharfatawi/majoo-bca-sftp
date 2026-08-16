@@ -3,13 +3,14 @@ const path = require('path');
 const SFTPClient = require('ssh2-sftp-client');
 const openpgp = require('openpgp');
 const secrets = require('./secrets.json');
+const { rangeFromArgv, matchesRange, describeRange } = require('./date_filter');
 
 const CONFIG = {
     privateKeyFile: 'majoo_private.pem',
     sftp: {
-        host: '10.128.0.15',
-        port: 8081,
-        username: 'MAJOOTEKIN',
+        host: secrets.sftpHost,
+        port: secrets.sftpPort,
+        username: secrets.sftpUsername,
         password: secrets.sftpPassword,
         remoteDir: '/BCA/MAJOOTEKIN/Fitur Non Finansial/File Transfer HEI/KYC Submerchant/Incoming'
     },
@@ -17,17 +18,23 @@ const CONFIG = {
 };
 
 const paths = {
-    decryptedDir: path.join(CONFIG.localDir, 'Decrypted'),
-    before: 'before_sync.txt',
-    newFiles: 'new_files.txt'
+    decryptedDir: path.join(CONFIG.localDir, 'Decrypted')
 };
 
+function outputPathFor(file) {
+    const tokens = path.basename(file, '.gpg').split('_');
+    const datePart = tokens[3] || 'unknown';
+    return path.join(paths.decryptedDir, `${datePart}_${file.replace('.gpg', '')}`);
+}
+
 async function main() {
+    const range = rangeFromArgv();
+    console.log(`🗓️  Filter tanggal: ${describeRange(range)}`);
+
     await fs.ensureDir(CONFIG.localDir);
     await fs.ensureDir(paths.decryptedDir);
 
     const localFiles = (await fs.readdir(CONFIG.localDir)).filter(f => f.endsWith('.gpg'));
-    await fs.writeFile(paths.before, localFiles.join('\n'));
 
     const sftp = new SFTPClient();
     try {
@@ -38,41 +45,40 @@ async function main() {
             .map(f => f.name)
             .filter(name => /^Rejected KYC_MAJOO_submerchant_registration_request_.*\.xls\.gpg$/.test(name));
 
-        const newFiles = matchedRemoteFiles.filter(f => !localFiles.includes(f));
-        if (newFiles.length === 0) {
+        const wanted = matchedRemoteFiles.filter(f => matchesRange(f, range));
+        const newFiles = wanted.filter(f => !localFiles.includes(f));
+
+        // Dengan filter tanggal, file yang sudah terunduh tapi belum ada hasil dekripsinya ikut diproses.
+        const backfill = range
+            ? wanted.filter(f => localFiles.includes(f) && !fs.pathExistsSync(outputPathFor(f)))
+            : [];
+
+        if (newFiles.length === 0 && backfill.length === 0) {
             console.log('Tidak ada file baru untuk didownload.');
             return;
         }
 
-        await fs.writeFile(paths.newFiles, newFiles.join('\n'));
-
-        // Download new files
+        // Download new files (via .part so an interrupted download isn't mistaken for a complete one)
         for (const file of newFiles) {
             const remotePath = path.posix.join(CONFIG.sftp.remoteDir, file);
             const localPath = path.join(CONFIG.localDir, file);
             console.log(`📥 Downloading: ${file}`);
-            await sftp.get(remotePath, localPath);
+            await sftp.get(remotePath, `${localPath}.part`);
+            await fs.move(`${localPath}.part`, localPath, { overwrite: true });
         }
 
         // Load private key
-        const privateKeyArmored = await fs.readFile(CONFIG.privateKeyFile, 'utf8');
+        // File kunci kadang tersimpan dengan "\n" literal (bukan baris baru) -> openpgp menolaknya.
+        const privateKeyArmored = (await fs.readFile(CONFIG.privateKeyFile, 'utf8')).replace(/\\n/g, '\n');
         const privateKey = await openpgp.readPrivateKey({ armoredKey: privateKeyArmored });
 
         // Decrypt new files
-        for (const file of newFiles) {
+        for (const file of [...newFiles, ...backfill]) {
             console.log(`🔐 Decrypting: ${file}`);
-            const baseName = path.basename(file, '.gpg');
-            const tokens = baseName.split('_');
-            const datePart = tokens[3] || 'unknown';
-            const inputPath = path.join(CONFIG.localDir, file);
-            const outputPath = path.join(paths.decryptedDir, `${datePart}_${file.replace('.gpg', '')}`);
-
-            await decryptGPG(inputPath, outputPath, privateKey);
+            await decryptGPG(path.join(CONFIG.localDir, file), outputPathFor(file), privateKey);
         }
 
         console.log('✅ Sinkronisasi dan dekripsi selesai.');
-        await fs.remove(paths.before);
-        await fs.remove(paths.newFiles);
     } catch (err) {
         console.error('❌ Terjadi kesalahan:', err.message);
     } finally {
@@ -95,4 +101,7 @@ async function decryptGPG(inputPath, outputPath, decryptedKey) {
     await fs.writeFile(outputPath, decrypted, 'utf8');
   }
 
-main();
+main().catch(err => {
+    console.error('❌', err.message);
+    process.exit(1);
+});

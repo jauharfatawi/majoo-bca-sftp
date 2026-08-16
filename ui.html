@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BCA SFTP — Download &amp; Decrypt</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --fg:#1a1d21; --card:#fff; --line:#d7dbe0; --accent:#0b7285; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16181c; --fg:#e6e8ea; --card:#1f2227; --line:#343a41; --accent:#3bc9db; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px; background:var(--bg); color:var(--fg);
+         font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:820px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p.sub { margin:0 0 20px; opacity:.7; font-size:13px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; }
+  label { display:block; font-weight:600; font-size:13px; margin:0 0 6px; }
+  .row { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:16px; }
+  .row > div { flex:1 1 240px; }
+  select, input { width:100%; padding:9px 10px; font:inherit; border-radius:7px;
+                  border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+  button { padding:10px 20px; font:inherit; font-weight:600; border:0; border-radius:7px;
+           background:var(--accent); color:#fff; cursor:pointer; }
+  button.stop { background:#c92a2a; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  small.hint { display:block; margin-top:6px; opacity:.65; font-size:12px; }
+  pre { background:#0d0f12; color:#d6dae0; border-radius:8px; padding:14px; margin:18px 0 0;
+        min-height:180px; max-height:52vh; overflow:auto; white-space:pre-wrap;
+        word-break:break-word; font:13px/1.55 ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>BCA SFTP — Download &amp; Decrypt</h1>
+  <p class="sub">Pilih folder dan tanggal, lalu klik Jalankan. File yang sudah ada tidak diunduh ulang.</p>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label for="script">Folder</label>
+        <select id="script"></select>
+      </div>
+      <div>
+        <label for="date">Tanggal</label>
+        <input id="date" list="presets" placeholder="kosongkan = semua tanggal" autocomplete="off">
+        <datalist id="presets">
+          <option value="today">hari ini</option>
+          <option value="kemarin">kemarin</option>
+          <option value="last 7 days">7 hari terakhir</option>
+          <option value="last 30 days">30 hari terakhir</option>
+          <option value="agustus">bulan Agustus</option>
+          <option value="juli">bulan Juli</option>
+          <option value="agustus 2024">Agustus 2024</option>
+          <option value="2025-08">satu bulan penuh (YYYY-MM)</option>
+          <option value="04082025">satu hari (DDMMYYYY)</option>
+        </datalist>
+        <small class="hint">Pilih dari daftar atau ketik sendiri, mis. <code>04-08-2025</code>.</small>
+      </div>
+    </div>
+    <button id="run">Jalankan</button>
+    <button id="stop" class="stop" hidden>Hentikan</button>
+  </div>
+
+  <pre id="log">Siap.</pre>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = $('log');
+let controller = null;
+
+// Halaman ini HARUS dibuka lewat server.js. Kalau dibuka langsung (file://),
+// semua fetch gagal dengan "Failed to fetch" — jelaskan, jangan biarkan user menebak.
+const OFFLINE_MSG = location.protocol === 'file:'
+  ? '❌ Halaman dibuka langsung dari file, bukan lewat server.\n\n'
+    + '   Tutup tab ini, lalu double-click START_UI.bat.\n'
+    + '   Browser akan terbuka sendiri ke alamat yang benar (http://localhost:...).'
+  : '❌ Tidak bisa menghubungi server.\n\n'
+    + '   Pastikan jendela START_UI.bat masih terbuka, lalu klik Jalankan lagi.';
+
+if (location.protocol === 'file:') {
+  log.textContent = OFFLINE_MSG;
+  $('run').disabled = true;
+} else {
+  fetch('/scripts')
+    .then(r => r.json())
+    .then(list => {
+      $('script').innerHTML = list.map(s => `<option value="${s.key}">${s.label}</option>`).join('');
+    })
+    .catch(() => { log.textContent = OFFLINE_MSG; $('run').disabled = true; });
+}
+
+function busy(on) {
+  $('run').disabled = on;
+  $('stop').hidden = !on;
+}
+
+$('stop').onclick = () => controller && controller.abort();
+
+$('run').onclick = async () => {
+  busy(true);
+  log.textContent = '';
+  controller = new AbortController();
+
+  const url = `/run?script=${encodeURIComponent($('script').value)}&date=${encodeURIComponent($('date').value)}`;
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      // Menempel ke bawah hanya kalau user memang sedang melihat baris terakhir.
+      const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
+      log.textContent += decoder.decode(value, { stream: true });
+      if (atBottom) log.scrollTop = log.scrollHeight;
+    }
+  } catch (err) {
+    log.textContent += err.name === 'AbortError' ? '\n⛔ Dihentikan.\n'
+      : err instanceof TypeError ? `\n${OFFLINE_MSG}\n`   // fetch gagal = server tidak terjangkau
+      : `\n❌ ${err.message}\n`;
+  } finally {
+    busy(false);
+    controller = null;
+  }
+};
+</script>
+</body>
+</html>

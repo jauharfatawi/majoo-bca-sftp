@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "main": "runner.js",
   "scripts": {
+    "ui": "node server.js",
+    "test": "node date_filter.js --test",
     "build": "pkg . --targets node18-win-x64 --output sftp-decryptor.exe"
   },
   "dependencies": {
